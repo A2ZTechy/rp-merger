@@ -63,7 +63,7 @@
         <!-- File List & Priority -->
         <div id="file-list-container" class="hidden">
             <h2 class="text-lg font-semibold mb-2 text-gray-700 dark:text-gray-300">Set Pack Priority</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Drag and drop to reorder. The pack at the top has the highest priority and will overwrite others.</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Drag and drop to reorder. The pack at the top has the **highest priority** and will overwrite others.</p>
             <ul id="file-list" class="space-y-2">
                 <!-- File items will be injected here by JS -->
             </ul>
@@ -224,7 +224,6 @@
 
             const outputName = (outputNameInput.value.trim() || 'MergedPack') + '.zip';
             
-            // UI updates for processing
             mergeButton.disabled = true;
             mergeButton.textContent = 'Merging...';
             progressContainer.classList.remove('hidden');
@@ -240,16 +239,31 @@
                 log(`\n▶️ Processing: ${file.name}`);
                 try {
                     const zip = await JSZip.loadAsync(file);
+                    
+                    // **FIX:** Detect and strip a common root directory
+                    let commonRoot = '';
+                    const entries = Object.keys(zip.files);
+                    if (entries.length > 0) {
+                        const firstEntry = entries.find(e => !zip.files[e].dir);
+                        if (firstEntry && firstEntry.includes('/')) {
+                            const topLevelDir = firstEntry.substring(0, firstEntry.indexOf('/') + 1);
+                            // Check if all other files also start with this directory
+                            if (entries.every(e => e.startsWith(topLevelDir) || zip.files[e].dir && e === topLevelDir)) {
+                                commonRoot = topLevelDir;
+                                log(`   - Found and stripping root folder: "${commonRoot}"`);
+                            }
+                        }
+                    }
+
                     const filePromises = [];
                     zip.forEach((relativePath, zipEntry) => {
                         if (!zipEntry.dir) {
                            const promise = zipEntry.async('uint8array').then(content => {
-                               // Skip special files from lower-priority packs
-                               if (file !== files[0] && (relativePath === 'pack.mcmeta' || relativePath === 'pack.png')) {
-                                   log(`   - Skipping special file: ${relativePath}`);
-                                   return;
+                               const finalPath = commonRoot ? relativePath.substring(commonRoot.length) : relativePath;
+                               // Only add the file if the path is not empty (handles the root folder itself)
+                               if (finalPath) {
+                                   outputZip.file(finalPath, content);
                                }
-                               outputZip.file(relativePath, content);
                            });
                            filePromises.push(promise);
                         }
@@ -263,13 +277,24 @@
                 updateProgress(filesProcessed, totalFiles);
             }
             
-            // Handle special files from the highest priority pack
             log('\n✨ Handling special files from highest priority pack...');
             const highestPriorityPack = files[0];
             try {
                 const zip = await JSZip.loadAsync(highestPriorityPack);
-                // pack.mcmeta
-                const mcmetaFile = zip.file('pack.mcmeta');
+                
+                let commonRoot = '';
+                const entries = Object.keys(zip.files);
+                if (entries.length > 0) {
+                    const firstEntry = entries.find(e => !zip.files[e].dir);
+                    if (firstEntry && firstEntry.includes('/')) {
+                        const topLevelDir = firstEntry.substring(0, firstEntry.indexOf('/') + 1);
+                        if (entries.every(e => e.startsWith(topLevelDir) || zip.files[e].dir && e === topLevelDir)) {
+                            commonRoot = topLevelDir;
+                        }
+                    }
+                }
+
+                const mcmetaFile = zip.file(commonRoot + 'pack.mcmeta');
                 if (mcmetaFile) {
                     const mcmetaContent = await mcmetaFile.async('string');
                     const mcmetaData = JSON.parse(mcmetaContent);
@@ -280,8 +305,8 @@
                 } else {
                     log('   - [Warning] pack.mcmeta not found in highest priority pack.');
                 }
-                // pack.png
-                const pngFile = zip.file('pack.png');
+                
+                const pngFile = zip.file(commonRoot + 'pack.png');
                 if (pngFile) {
                     const pngContent = await pngFile.async('uint8array');
                     outputZip.file('pack.png', pngContent);
@@ -290,7 +315,7 @@
                     log('   - [Info] pack.png not found in highest priority pack.');
                 }
             } catch(e) {
-                 log(`   ❌ Error processing special files: ${e.message}`);
+                 log(`   ❌ Error processing special files from ${highestPriorityPack.name}: ${e.message}`);
             }
 
             log('\n📦 Generating final .zip file...');
@@ -316,7 +341,6 @@
             mergeButton.disabled = false;
             mergeButton.textContent = 'Merge Packs';
             progressBar.style.width = '0%';
-            // Keep log visible for a bit, then hide
             setTimeout(() => {
                 progressContainer.classList.add('hidden');
                 logElement.innerHTML = '';
