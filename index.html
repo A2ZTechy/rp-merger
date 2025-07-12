@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft Resource Pack Merger</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.0/FileSaver.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .file-item {
+            cursor: grab;
+            transition: background-color 0.2s, box-shadow 0.2s;
+        }
+        .file-item:active {
+            cursor: grabbing;
+            background-color: #4f46e5;
+            color: white;
+        }
+        .dragging {
+            opacity: 0.5;
+            background: #e0e7ff;
+        }
+        .drag-over {
+            border-style: solid;
+            border-color: #4f46e5;
+            transform: scale(1.02);
+        }
+        .priority-label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 0.1rem 0.4rem;
+            border-radius: 0.25rem;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-2xl bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 md:p-8 space-y-6">
+        <!-- Header -->
+        <div class="text-center">
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Resource Pack Merger</h1>
+            <p class="text-gray-500 dark:text-gray-400 mt-2">Merge Minecraft .zip packs. Drag to set priority.</p>
+        </div>
+
+        <!-- File Upload Area -->
+        <div id="drop-zone" class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center transition-all duration-300">
+            <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <p class="mt-4 text-gray-600 dark:text-gray-300">
+                <span class="font-semibold text-indigo-600 dark:text-indigo-400">Click to upload</span> or drag and drop
+            </p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Select multiple .zip files</p>
+            <input type="file" id="file-input" multiple accept=".zip" class="hidden">
+        </div>
+
+        <!-- File List & Priority -->
+        <div id="file-list-container" class="hidden">
+            <h2 class="text-lg font-semibold mb-2 text-gray-700 dark:text-gray-300">Set Pack Priority</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Drag and drop to reorder. The pack at the top has the highest priority and will overwrite others.</p>
+            <ul id="file-list" class="space-y-2">
+                <!-- File items will be injected here by JS -->
+            </ul>
+        </div>
+
+        <!-- Output Name & Merge Button -->
+        <div id="merge-controls" class="hidden space-y-4">
+            <div>
+                <label for="output-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Merged Pack Name</label>
+                <input type="text" id="output-name" class="mt-1 block w-full bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="MyMergedPack">
+            </div>
+            <button id="merge-button" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-full shadow-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-transform transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none">
+                Merge Packs
+            </button>
+        </div>
+
+        <!-- Progress & Log -->
+        <div id="progress-container" class="hidden">
+            <h3 class="text-lg font-semibold mb-2 text-gray-700 dark:text-gray-300">Merging...</h3>
+            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+                <div id="progress-bar" class="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+            <pre id="log" class="mt-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 text-xs text-gray-600 dark:text-gray-400 h-40 overflow-y-auto"></pre>
+        </div>
+
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileListContainer = document.getElementById('file-list-container');
+        const fileList = document.getElementById('file-list');
+        const mergeControls = document.getElementById('merge-controls');
+        const outputNameInput = document.getElementById('output-name');
+        const mergeButton = document.getElementById('merge-button');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const logElement = document.getElementById('log');
+
+        let files = [];
+        let draggedItem = null;
+
+        // --- Event Listeners ---
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over', 'border-indigo-500', 'bg-indigo-50', 'dark:bg-indigo-900/20');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over', 'border-indigo-500', 'bg-indigo-50', 'dark:bg-indigo-900/20');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over', 'border-indigo-500', 'bg-indigo-50', 'dark:bg-indigo-900/20');
+            const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.zip'));
+            handleFiles(droppedFiles);
+        });
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(Array.from(e.target.files));
+        });
+        mergeButton.addEventListener('click', mergePacks);
+
+        // --- File Handling and UI Update ---
+        function handleFiles(newFiles) {
+            const uniqueNewFiles = newFiles.filter(nf => !files.some(f => f.name === nf.name && f.size === nf.size));
+            files.push(...uniqueNewFiles);
+            updateFileList();
+        }
+
+        function updateFileList() {
+            fileList.innerHTML = '';
+            if (files.length > 0) {
+                files.forEach((file, index) => {
+                    const li = document.createElement('li');
+                    li.className = 'file-item bg-gray-100 dark:bg-gray-700 p-3 rounded-lg flex items-center justify-between shadow-sm';
+                    li.draggable = true;
+                    li.dataset.index = index;
+
+                    const priorityLabel = index === 0 ? '<span class="priority-label bg-green-200 text-green-800 dark:bg-green-700 dark:text-green-100">Highest</span>' : index === files.length - 1 ? '<span class="priority-label bg-yellow-200 text-yellow-800 dark:bg-yellow-700 dark:text-yellow-100">Lowest</span>' : '';
+
+                    li.innerHTML = `
+                        <div class="flex items-center space-x-3">
+                            <span class="text-gray-500 dark:text-gray-400 font-bold">${index + 1}</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-500" viewBox="0 0 20 20" fill="currentColor"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" /></svg>
+                            <span class="font-medium">${file.name}</span>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            ${priorityLabel}
+                            <button class="remove-btn text-gray-400 hover:text-red-500" data-index="${index}">&times;</button>
+                        </div>
+                    `;
+                    fileList.appendChild(li);
+                });
+                fileListContainer.classList.remove('hidden');
+                mergeControls.classList.remove('hidden');
+            } else {
+                fileListContainer.classList.add('hidden');
+                mergeControls.classList.add('hidden');
+            }
+        }
+        
+        // --- Drag and Drop Reordering ---
+        fileList.addEventListener('dragstart', (e) => {
+            draggedItem = e.target;
+            setTimeout(() => e.target.classList.add('dragging'), 0);
+        });
+
+        fileList.addEventListener('dragend', (e) => {
+            draggedItem.classList.remove('dragging');
+            draggedItem = null;
+        });
+
+        fileList.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const afterElement = getDragAfterElement(fileList, e.clientY);
+            const currentDragged = document.querySelector('.dragging');
+            if (afterElement == null) {
+                fileList.appendChild(currentDragged);
+            } else {
+                fileList.insertBefore(currentDragged, afterElement);
+            }
+        });
+        
+        fileList.addEventListener('drop', () => {
+            const newOrder = Array.from(fileList.children).map(li => files[parseInt(li.dataset.index)]);
+            files = newOrder;
+            updateFileList();
+        });
+        
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.file-item:not(.dragging)')];
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else {
+                    return closest;
+                }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
+        // --- Remove File ---
+        fileList.addEventListener('click', (e) => {
+            if (e.target.classList.contains('remove-btn')) {
+                const indexToRemove = parseInt(e.target.dataset.index);
+                files.splice(indexToRemove, 1);
+                updateFileList();
+            }
+        });
+
+        // --- Merging Logic ---
+        async function mergePacks() {
+            if (files.length < 2) {
+                log('Error: Please select at least two packs to merge.');
+                return;
+            }
+
+            const outputName = (outputNameInput.value.trim() || 'MergedPack') + '.zip';
+            
+            // UI updates for processing
+            mergeButton.disabled = true;
+            mergeButton.textContent = 'Merging...';
+            progressContainer.classList.remove('hidden');
+            logElement.innerHTML = '';
+            log(`🚀 Starting merge for "${outputName}"...`);
+
+            const outputZip = new JSZip();
+            const packsToMerge = [...files].reverse(); // Reverse for low to high priority processing
+            const totalFiles = packsToMerge.length;
+            let filesProcessed = 0;
+
+            for (const file of packsToMerge) {
+                log(`\n▶️ Processing: ${file.name}`);
+                try {
+                    const zip = await JSZip.loadAsync(file);
+                    const filePromises = [];
+                    zip.forEach((relativePath, zipEntry) => {
+                        if (!zipEntry.dir) {
+                           const promise = zipEntry.async('uint8array').then(content => {
+                               // Skip special files from lower-priority packs
+                               if (file !== files[0] && (relativePath === 'pack.mcmeta' || relativePath === 'pack.png')) {
+                                   log(`   - Skipping special file: ${relativePath}`);
+                                   return;
+                               }
+                               outputZip.file(relativePath, content);
+                           });
+                           filePromises.push(promise);
+                        }
+                    });
+                    await Promise.all(filePromises);
+                    log(`   ✅ Finished processing: ${file.name}`);
+                } catch (e) {
+                    log(`   ❌ Error processing ${file.name}: ${e.message}`);
+                }
+                filesProcessed++;
+                updateProgress(filesProcessed, totalFiles);
+            }
+            
+            // Handle special files from the highest priority pack
+            log('\n✨ Handling special files from highest priority pack...');
+            const highestPriorityPack = files[0];
+            try {
+                const zip = await JSZip.loadAsync(highestPriorityPack);
+                // pack.mcmeta
+                const mcmetaFile = zip.file('pack.mcmeta');
+                if (mcmetaFile) {
+                    const mcmetaContent = await mcmetaFile.async('string');
+                    const mcmetaData = JSON.parse(mcmetaContent);
+                    const originalDesc = mcmetaData.pack.description || 'No description';
+                    mcmetaData.pack.description = `Merged Pack | Original: ${originalDesc}`;
+                    outputZip.file('pack.mcmeta', JSON.stringify(mcmetaData, null, 4));
+                    log('   - Modified and added pack.mcmeta');
+                } else {
+                    log('   - [Warning] pack.mcmeta not found in highest priority pack.');
+                }
+                // pack.png
+                const pngFile = zip.file('pack.png');
+                if (pngFile) {
+                    const pngContent = await pngFile.async('uint8array');
+                    outputZip.file('pack.png', pngContent);
+                    log('   - Added pack.png');
+                } else {
+                    log('   - [Info] pack.png not found in highest priority pack.');
+                }
+            } catch(e) {
+                 log(`   ❌ Error processing special files: ${e.message}`);
+            }
+
+            log('\n📦 Generating final .zip file...');
+            outputZip.generateAsync({ type: 'blob', compression: "DEFLATE" })
+                .then(function(content) {
+                    log('✅ Merge complete! Your download will start shortly.');
+                    saveAs(content, outputName);
+                    resetUI();
+                });
+        }
+
+        function log(message) {
+            logElement.textContent += message + '\n';
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function updateProgress(current, total) {
+            const percentage = Math.round((current / total) * 100);
+            progressBar.style.width = `${percentage}%`;
+        }
+
+        function resetUI() {
+            mergeButton.disabled = false;
+            mergeButton.textContent = 'Merge Packs';
+            progressBar.style.width = '0%';
+            // Keep log visible for a bit, then hide
+            setTimeout(() => {
+                progressContainer.classList.add('hidden');
+                logElement.innerHTML = '';
+            }, 10000);
+        }
+
+    </script>
+</body>
+</html>
